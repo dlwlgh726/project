@@ -17,7 +17,8 @@ housing_df = pd.DataFrame({
     '전국': housing_nation
 })
 
-# 4. '연월'에서 연도만 추출해 정수형으로 변환
+# 4. '연월'을 문자열로 변환 후 연도 추출
+housing_df['연월'] = housing_df['연월'].astype(str)  # 여기 꼭 변환
 housing_df['연도'] = housing_df['연월'].str.split('.').str[0].astype(int)
 
 # 5. 2006년 이후 데이터만 필터링
