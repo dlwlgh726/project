@@ -5,8 +5,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 # 1. 파일 불러오기
-housing_path = "아파트_매매_실거래_평균가격_20250609090955 (1).csv"
-interest_path = "한국은행 기준금리 및 여수신금리_05123930 (1).csv"
+housing_path = "아파트_매매_실거래_평균가격_20250609090955.csv"
+interest_path = "한국은행 기준금리 및 여수신금리_05123930.csv"
 
 housing_df = pd.read_csv(housing_path, encoding='euc-kr')
 interest_df = pd.read_csv(interest_path, encoding='utf-8-sig')
