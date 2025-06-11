@@ -4,43 +4,58 @@ import seaborn as sns
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# 1. 파일 불러오기
-housing_path = "아파트_매매_실거래_평균가격_20250609090955.csv"
-interest_path = "한국은행 기준금리 및 여수신금리_05123930.csv"
+# 1. 파일 경로 지정
+housing_path = "/mnt/data/아파트_매매_실거래_평균가격_20250609090955.csv"
+interest_path = "/mnt/data/한국은행 기준금리 및 여수신금리_05123930.csv"
 
-housing_df = pd.read_csv(housing_path, encoding='euc-kr')
-interest_df = pd.read_csv(interest_path, encoding='utf-8-sig')
+# 2. 아파트 매매 데이터 전처리
+housing_raw = pd.read_csv(housing_path, encoding='euc-kr')
 
-# 2. 아파트 데이터 전처리
-# - 행정구역 이름을 인덱스로 설정
-housing_df = housing_df.set_index(housing_df.columns[0])
-# - 행(전국) 선택 후 전치
-housing_df = housing_df.loc['전국'].T.reset_index()
-housing_df.columns = ['연도월', '전국']
-# - 연도 추출
-housing_df['연도'] = housing_df['연도월'].str.split('.').str[0].astype(int)
-# - 연도별 평균값 계산
-housing_df = housing_df.groupby('연도')['전국'].mean().reset_index()
+# 컬럼명은 첫 번째 행, 데이터는 두 번째 행 사용
+header = housing_raw.iloc[0, 1:]   # '2006.01', '2006.02', ...
+data = housing_raw.iloc[1, 1:]     # 평균 가격
+
+# 새로운 DataFrame 생성
+housing_df = pd.DataFrame({
+    '연월': header.values,
+    '전국': data.values
+})
+
+# 연도 추출
+housing_df['연도'] = housing_df['연월'].astype(str).str.split('.').str[0].astype(int)
+housing_df['전국'] = pd.to_numeric(housing_df['전국'], errors='coerce')  # 문자열 -> 숫자
+
+# 연도별 평균 계산 (같은 연도 여러 월 존재 → 연도별 평균)
+housing_df = housing_df.groupby('연도', as_index=False)['전국'].mean()
+
+# 2006년 이후만 필터링
+housing_df = housing_df[housing_df['연도'] >= 2006]
 
 # 3. 금리 데이터 전처리
-# - 필요한 행(0행)에서 데이터 추출
-interest_df = interest_df.iloc[0]
-# - 필요한 열만 선택 (2001~2025 사이 연도만)
-interest_df = interest_df[['2006','2007','2008','2009','2010','2011','2012',
-                           '2013','2014','2015','2016','2017','2018','2019',
-                           '2020','2021','2022','2023','2024','2025']]
-# - Series -> DataFrame
-interest_df = interest_df.T.reset_index()
-interest_df.columns = ['연도', '기준금리']
-interest_df['연도'] = interest_df['연도'].astype(int)
-interest_df['기준금리'] = interest_df['기준금리'].astype(float)
+interest_raw = pd.read_csv(interest_path, encoding='utf-8-sig')
 
-# 4. 데이터 병합
+# '기준금리'가 포함된 행만 필터링 (2번째 열 기준)
+rate_row = interest_raw[interest_raw.iloc[:, 1].astype(str).str.contains('기준금리', na=False)]
+
+# 금리 데이터 추출 (E열 이후 연도 데이터)
+rate_values = rate_row.iloc[:, 4:].transpose()
+rate_values.columns = ['기준금리']
+rate_values.index.name = '연도'
+rate_values.reset_index(inplace=True)
+
+# 연도 int 변환 및 금리 float 변환
+rate_values['연도'] = rate_values['연도'].astype(int)
+rate_values['기준금리'] = pd.to_numeric(rate_values['기준금리'], errors='coerce')
+
+# 2006년 이후 필터링
+interest_df = rate_values[rate_values['연도'] >= 2006]
+
+# 4. 병합
 merged_df = pd.merge(housing_df, interest_df, on='연도', how='inner')
 merged_df.dropna(inplace=True)
 
-# 5. 시각화 - 산점도
-plt.figure(figsize=(10,6))
+# 5. 상관관계 시각화
+plt.figure(figsize=(10, 6))
 sns.scatterplot(data=merged_df, x='기준금리', y='전국')
 plt.title('기준금리 vs 전국 아파트 평균 매매가격 (연도별)')
 plt.xlabel('기준금리 (%)')
@@ -65,7 +80,7 @@ print(f"\n📈 회귀식: y = {model.coef_[0]:.2f} * x + {model.intercept_:.2f}"
 print(f"📊 결정계수 R²: {r2:.3f}")
 
 # 8. 회귀선 시각화
-plt.figure(figsize=(10,6))
+plt.figure(figsize=(10, 6))
 sns.regplot(x='기준금리', y='전국', data=merged_df, ci=None, line_kws={"color": "red"})
 plt.title('기준금리와 전국 평균 매매가격 선형 회귀 분석 (연도별)')
 plt.xlabel('기준금리 (%)')
