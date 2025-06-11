@@ -1,88 +1,100 @@
+import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import streamlit as st
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# Streamlit 제목
-st.title("📊 기준금리와 전국 아파트 평균 매매가격 분석")
+st.title("📊 기준금리와 아파트 매매 가격 분석")
 
-# 파일 업로드
-housing_file = st.file_uploader("아파트 매매 실거래 평균가격 파일 업로드", type=['csv'])
-interest_file = st.file_uploader("한국은행 기준금리 파일 업로드", type=['csv'])
+# 파일 경로
+housing_path = "아파트_매매_실거래_평균가격_20250609090955.csv"
+interest_path = "한국은행 기준금리 및 여수신금리_05123930.csv"
 
-# 분석 시작 조건
-if housing_file is not None and interest_file is not None:
-    try:
-        # 1. 아파트 가격 데이터 로딩
-        housing_raw = pd.read_csv(housing_file, encoding='euc-kr', thousands=',')
-        housing_raw = housing_raw.rename(columns={housing_raw.columns[0]: '지역'})
-        housing_df = housing_raw[housing_raw['지역'] == '전국'].drop('지역', axis=1)
-        housing_df = housing_df.T.reset_index()
-        housing_df.columns = ['연월', '전국']
-        housing_df = housing_df[housing_df['연월'].str.match(r'^\d{4}\.\d{2}$')]
-        housing_df['연도'] = housing_df['연월'].str[:4].astype(int)
-        housing_df = housing_df[['연도', '전국']]
-        housing_df['전국'] = housing_df['전국'].astype(float)
-        housing_df = housing_df.groupby('연도').mean().reset_index()
-        housing_df = housing_df[housing_df['연도'] >= 2006]
+# 데이터 불러오기
+try:
+    housing_raw = pd.read_csv(housing_path, encoding='euc-kr')
+    interest_raw = pd.read_csv(interest_path, encoding='utf-8-sig')
+except FileNotFoundError:
+    st.error("❌ CSV 파일을 찾을 수 없습니다. 경로를 확인하세요.")
+    st.stop()
 
-        # 2. 기준금리 데이터 로딩
-        interest_raw = pd.read_csv(interest_file, encoding='utf-8-sig')
-        interest_df = interest_raw.iloc[1:, :]
-        interest_df.columns = interest_raw.iloc[0]
-        interest_df = interest_df.dropna(axis=1, how='all')
+### 1. 아파트 매매 데이터 전처리
+try:
+    housing_df = housing_raw.copy()
+    housing_df = housing_df.rename(columns={housing_df.columns[0]: '지역'})
+    housing_df = housing_df[housing_df['지역'] == '전국']
+    housing_df = housing_df.drop(columns=['지역'])
 
-        year_columns = [str(y) for y in range(2006, 2026) if str(y) in interest_df.columns]
-        interest_df = interest_df[year_columns]
-        interest_df = interest_df.astype(float)
+    # 연도-월 컬럼명을 '연도'만 추출하여 행으로 변환
+    housing_df = housing_df.T.reset_index()
+    housing_df.columns = ['연월', '전국']
+    housing_df = housing_df[housing_df['연월'].str.match(r'^\d{4}\.\d{2}$')]
+    housing_df['연도'] = housing_df['연월'].str.split('.').str[0].astype(int)
 
-        interest_df = pd.DataFrame({
-            '연도': [int(col) for col in interest_df.columns],
-            '기준금리': interest_df.mean(axis=0).values
-        })
+    # 연도별 평균값
+    housing_df = housing_df.groupby('연도')['전국'].mean().reset_index()
+    housing_df['전국'] = housing_df['전국'].astype(int)
 
-        # 3. 데이터 병합
-        merged_df = pd.merge(housing_df, interest_df, on='연도', how='inner')
-        merged_df.dropna(inplace=True)
+except Exception as e:
+    st.error(f"❌ 아파트 매매 데이터 처리 중 오류 발생: {e}")
+    st.stop()
 
-        # 4. 시각화: 산점도
-        st.subheader("🔍 기준금리와 전국 평균 매매가격 산점도")
-        fig1, ax1 = plt.subplots(figsize=(10, 6))
-        sns.scatterplot(data=merged_df, x='기준금리', y='전국', ax=ax1)
-        ax1.set_title('기준금리 vs 전국 아파트 평균 매매가격 (연도별)')
-        ax1.set_xlabel('기준금리 (%)')
-        ax1.set_ylabel('전국 평균 매매가격 (원)')
-        ax1.grid(True)
-        st.pyplot(fig1)
+### 2. 기준금리 데이터 전처리
+try:
+    interest_df = interest_raw.copy()
+    # 5행부터 실제 데이터 시작됨 (E열부터 연도 있음)
+    interest_df = interest_df.iloc[4:, 4:]
+    interest_df.columns = interest_df.iloc[0]  # 연도 행
+    interest_df = interest_df[1:]  # 데이터만 남김
+    interest_df = interest_df.T.reset_index()
+    interest_df.columns = ['연도', '기준금리']
+    interest_df['연도'] = interest_df['연도'].astype(int)
+    interest_df['기준금리'] = pd.to_numeric(interest_df['기준금리'], errors='coerce')
+    interest_df = interest_df.dropna()
+except Exception as e:
+    st.error(f"❌ 금리 데이터 처리 중 오류 발생: {e}")
+    st.stop()
 
-        # 5. 상관계수
-        correlation = merged_df['기준금리'].corr(merged_df['전국'])
-        st.write(f"📌 **기준금리와 전국 평균 매매가격의 상관계수**: `{correlation:.3f}`")
+### 3. 병합
+merged_df = pd.merge(housing_df, interest_df, on='연도', how='inner')
 
-        # 6. 단순 선형 회귀 분석
-        X = merged_df[['기준금리']]
-        y = merged_df['전국']
-        model = LinearRegression()
-        model.fit(X, y)
-        y_pred = model.predict(X)
-        r2 = r2_score(y, y_pred)
+if merged_df.empty:
+    st.warning("⚠️ 병합된 데이터가 없습니다. 연도 범위를 다시 확인하세요.")
+    st.stop()
 
-        st.write(f"📈 **회귀식**: `y = {model.coef_[0]:.2f} * x + {model.intercept_:.2f}`")
-        st.write(f"📊 **결정계수 R²**: `{r2:.3f}`")
+### 4. 시각화
+st.subheader("📉 기준금리 vs 전국 아파트 평균 매매가격")
+fig, ax = plt.subplots(figsize=(10, 6))
+sns.scatterplot(data=merged_df, x='기준금리', y='전국', ax=ax)
+plt.title('기준금리 vs 전국 아파트 평균 매매가격 (연도별)')
+plt.xlabel('기준금리 (%)')
+plt.ylabel('전국 평균 매매가격 (원)')
+st.pyplot(fig)
 
-        # 7. 회귀선 시각화
-        st.subheader("📈 선형 회귀 분석 시각화")
-        fig2, ax2 = plt.subplots(figsize=(10, 6))
-        sns.regplot(x='기준금리', y='전국', data=merged_df, ci=None, line_kws={"color": "red"}, ax=ax2)
-        ax2.set_title('기준금리와 전국 평균 매매가격 선형 회귀 분석 (연도별)')
-        ax2.set_xlabel('기준금리 (%)')
-        ax2.set_ylabel('전국 평균 매매가격 (원)')
-        ax2.grid(True)
-        st.pyplot(fig2)
+### 5. 상관계수
+correlation = merged_df['기준금리'].corr(merged_df['전국'])
+st.markdown(f"📌 **기준금리와 전국 평균 매매가격의 상관계수**: `{correlation:.3f}`")
 
-    except Exception as e:
-        st.error(f"⚠️ 오류 발생: {e}")
+### 6. 선형 회귀
+X = merged_df[['기준금리']]
+y = merged_df['전국']
+
+if len(X) > 0:
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
+    r2 = r2_score(y, y_pred)
+
+    st.markdown(f"📈 **회귀식**: `y = {model.coef_[0]:.2f} * x + {model.intercept_:.2f}`")
+    st.markdown(f"📊 **결정계수 (R²)**: `{r2:.3f}`")
+
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    sns.regplot(x='기준금리', y='전국', data=merged_df, ci=None, line_kws={"color": "red"}, ax=ax2)
+    plt.title('기준금리와 전국 평균 매매가격 선형 회귀 분석')
+    plt.xlabel('기준금리 (%)')
+    plt.ylabel('전국 평균 매매가격 (원)')
+    st.pyplot(fig2)
 else:
-    st.info("📁 두 CSV 파일을 모두 업로드해 주세요.")
+    st.warning("⚠️ 회귀 분석을 위한 데이터가 충분하지 않습니다.")
+
