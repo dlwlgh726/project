@@ -1,92 +1,93 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score
 
-st.set_page_config(page_title="금리와 아파트 가격 예측", layout="wide")
-st.title("🏡 금리와 아파트 매매가격의 관계 분석 (2006~2024)")
+st.set_page_config(page_title="지역별 금리 기반 아파트 가격 예측기", layout="centered")
+st.title("🏠 지역별 금리 기반 아파트 평균가격 예측기")
 
-# 파일 업로드
-apt_file = st.file_uploader("📁 아파트 매매 실거래 평균가격 CSV 업로드", type="csv")
-rate_file = st.file_uploader("📁 한국은행 금리 CSV 업로드", type="csv")
+# ------------------------
+# 1. 데이터 로딩
+# ------------------------
 
-if apt_file and rate_file:
-    try:
-        # CSV 불러오기
-        apt_df = pd.read_csv(apt_file, encoding="cp949")
-        rate_df = pd.read_csv(rate_file, encoding="cp949")
+@st.cache_data
+def load_data():
+    # 지역별 아파트 가격
+    apt_df = pd.read_csv("아파트_매매_실거래_평균가격_20250611110831.csv", encoding="cp949")
+    apt_df = apt_df.rename(columns={"행정구역별(2)": "지역"})
+    apt_long = apt_df.melt(id_vars=["지역"], var_name="연도", value_name="평균가격")
+    apt_long["연도"] = apt_long["연도"].astype(int)
+    apt_long["평균가격"] = pd.to_numeric(apt_long["평균가격"], errors="coerce")
 
-        # 날짜 컬럼 정리
-        apt_df = apt_df.rename(columns={apt_df.columns[0]: "날짜"})
-        rate_df = rate_df.rename(columns={rate_df.columns[0]: "날짜"})
+    # 금리 데이터
+    rate_df = pd.read_csv("한국은행 기준금리 및 여수신금리_05123930.csv", encoding="cp949")
+    rate_df = rate_df[rate_df["계정항목"] == "한국은행 기준금리"].drop(columns=["계정항목"])
+    rate_long = rate_df.melt(var_name="연도", value_name="기준금리")
+    rate_long["연도"] = rate_long["연도"].astype(int)
+    rate_long["기준금리"] = pd.to_numeric(rate_long["기준금리"], errors="coerce")
 
-        apt_df["날짜"] = pd.to_datetime(apt_df["날짜"], errors="coerce")
-        rate_df["날짜"] = pd.to_datetime(rate_df["날짜"], errors="coerce")
+    # 병합
+    merged = pd.merge(apt_long, rate_long, on="연도", how="inner")
+    return merged
 
-        apt_df = apt_df.dropna(subset=["날짜"])
-        rate_df = rate_df.dropna(subset=["날짜"])
+data = load_data()
 
-        # 연도 추출
-        apt_df["연도"] = apt_df["날짜"].dt.year
-        rate_df["연도"] = rate_df["날짜"].dt.year
+# ------------------------
+# 2. 지역 선택 및 모델 학습
+# ------------------------
+regions = sorted(data["지역"].unique())
+selected_region = st.selectbox("📍 지역을 선택하세요", regions)
+input_rate = st.slider("📉 기준금리 (%)", min_value=0.0, max_value=10.0, value=3.5, step=0.1)
 
-        # 연도 필터링: 2006~2024년
-        apt_df = apt_df[(apt_df["연도"] >= 2006) & (apt_df["연도"] <= 2024)]
-        rate_df = rate_df[(rate_df["연도"] >= 2006) & (rate_df["연도"] <= 2024)]
+region_data = data[data["지역"] == selected_region].dropna()
 
-        # 연도별 평균 계산
-        apt_year = apt_df.groupby("연도").mean(numeric_only=True).reset_index()
-        rate_year = rate_df.groupby("연도").mean(numeric_only=True).reset_index()
+# 선형회귀 모델 학습
+X = region_data[["기준금리"]]
+y = region_data["평균가격"]
+model = LinearRegression()
+model.fit(X, y)
+predicted_price = model.predict(np.array([[input_rate]]))[0]
 
-        # 병합
-        merged = pd.merge(apt_year, rate_year, on="연도", how="inner")
+# ------------------------
+# 3. 상관계수 계산 및 출력
+# ------------------------
+corr = region_data["기준금리"].corr(region_data["평균가격"])
 
-        if merged.empty:
-            st.error("🚫 병합된 데이터가 없습니다. 연도가 겹치지 않거나 데이터에 문제가 있을 수 있습니다.")
-            st.stop()
+st.subheader(f"🔍 {selected_region} 지역 기준금리 {input_rate:.1f}%에 대한 예측")
+st.metric("📊 예상 평균 아파트 가격", f"{predicted_price:,.0f} 백만원")
+st.write(f"📈 기준금리와 아파트 평균가격 간 상관계수: **{corr:.3f}**")
 
-        # 주요 컬럼 자동 선택
-        price_col = [col for col in merged.columns if "가격" in col][0]
-        rate_col = [col for col in merged.columns if "금리" in col][0]
+# ------------------------
+# 4. 기준금리와 평균가격 산점도 및 회귀선 시각화
+# ------------------------
+fig, ax = plt.subplots()
+sns.regplot(x="기준금리", y="평균가격", data=region_data, ax=ax, scatter_kws={"s": 50})
+ax.scatter(input_rate, predicted_price, color="red", label="입력값", s=100)
+ax.set_title(f"[ {selected_region} ] 기준금리와 아파트 평균가격 관계")
+ax.set_xlabel("기준금리 (%)")
+ax.set_ylabel("평균 아파트 가격 (백만원)")
+ax.legend()
+st.pyplot(fig)
 
-        # 시각화
-        st.subheader("📈 연도별 금리 vs 아파트 평균가격")
-        fig, ax1 = plt.subplots(figsize=(10, 5))
-        ax1.plot(merged["연도"], merged[price_col], color='tab:blue', marker='o', label='아파트 가격')
-        ax1.set_ylabel("아파트 가격", color="tab:blue")
-        ax2 = ax1.twinx()
-        ax2.plot(merged["연도"], merged[rate_col], color='tab:red', marker='s', label='기준금리')
-        ax2.set_ylabel("기준금리", color="tab:red")
-        st.pyplot(fig)
+# ------------------------
+# 5. 연도별 변화 추이 그래프
+# ------------------------
+fig2, ax1 = plt.subplots(figsize=(8, 4))
 
-        # 회귀 모델 학습
-        st.subheader("🔍 선형 회귀 분석")
-        X = merged[[rate_col]]
-        y = merged[price_col]
+color1 = "tab:blue"
+ax1.set_xlabel("연도")
+ax1.set_ylabel("평균 아파트 가격 (백만원)", color=color1)
+ax1.plot(region_data["연도"], region_data["평균가격"], marker='o', color=color1, label="평균가격")
+ax1.tick_params(axis='y', labelcolor=color1)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+ax2 = ax1.twinx()
+color2 = "tab:red"
+ax2.set_ylabel("기준금리 (%)", color=color2)
+ax2.plot(region_data["연도"], region_data["기준금리"], marker='s', linestyle='--', color=color2, label="기준금리")
+ax2.tick_params(axis='y', labelcolor=color2)
 
-        model = LinearRegression()
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-
-        st.markdown(f"**📊 R² Score:** `{r2_score(y_test, y_pred):.4f}`")
-        st.markdown(f"**📈 회귀 계수 (기울기):** `{model.coef_[0]:.2f}`")
-        st.markdown(f"**📉 절편:** `{model.intercept_:.2f}`")
-
-        # 회귀 시각화
-        fig2, ax = plt.subplots()
-        sns.regplot(x=rate_col, y=price_col, data=merged, ax=ax)
-        ax.set_xlabel("기준금리")
-        ax.set_ylabel("아파트 가격")
-        st.pyplot(fig2)
-
-    except Exception as e:
-        st.error(f"❌ 오류 발생: {e}")
-else:
-    st.info("⏳ 두 개의 CSV 파일을 업로드해 주세요.")
+plt.title(f"[ {selected_region} ] 연도별 평균 아파트 가격 및 기준금리 변화 추이")
+fig2.tight_layout()
+st.pyplot(fig2)
